@@ -1,0 +1,9 @@
+Package: com.local.bioprotectleakguard
+Name: BioProtect Leak Guard
+Version: 2.0.13
+Architecture: iphoneos-arm64e
+Description: 修复 BioProtect 的资源泄漏，解决长时间使用后桌面注销的问题。逆向 BioProtect 4.6-222 确认两类真实泄漏：一是 CFUserNotification 应答端口与主 RunLoop 源创建后全二进制无任何释放调用，二是文件监听回调每次触发都 open 一个 fd 且从不 close。本模块在宽限期后取消通知并摘除 RunLoop 源，在 fd 使用量超过水位时关闭经 F_GETPATH 复核一致的泄漏 fd，并每 5 分钟记录端口数与 fd 使用量。2.0.4 恢复 substrate 直连。2.0.5 影子日志挪至加载 5 秒后并新增 rootfs 前缀真实根直写。2.0.7 修正 arm64e 系统进程进安全模式的根因：clang19 工具链给 arm64e 编 CFSTR 常量时 isa 重定位未带认证，chained fixups 里 __cfstring 的 isa 全为无 PAC 普通绑定，而 Xcode 原版为认证绑定，objc_msgSend 遇常量字符串接收者即 SIGBUS；构建期把 isa 条目补丁为认证绑定（diversity=0x6AE1、地址分化、key=2，与原版逐位同形）后重签。2.0.8 修正真机验证暴露的定时器生命周期 bug：dispatch source 局部变量被 ARC 释放导致清扫与统计从未运行，端口照旧涨满；改为全局持有，并新增 mach_port_allocate 端口归因观测，统计行输出总分配数、BioProtect 调用方分配数与 Top 调用点偏移。arm64 加 arm64e 双切片原生 roothide 包。
+Maintainer: local
+Author: local
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 15.0)

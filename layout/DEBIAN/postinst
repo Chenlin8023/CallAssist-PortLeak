@@ -1,0 +1,72 @@
+#!/bin/bash
+# BioProtectLeakGuard 安装后：落安装标记、建目录、放配置、滚动旧日志
+# 2.0.5：新增 installed 标记 —— 让「包装上了」与「dylib 加载了」可区分。
+# 注：本脚本里的绝对路径会被 RootHide 转换器改写（/var/jb/var/mobile → /var/mobile、
+# /var/mobile/Library → /rootfs/var/mobile/Library），改写后仍是有效位置，无害。
+R=/var/mobile/Library/BioProtectLeakGuard
+J=/var/jb/var/mobile/Library/BioProtectLeakGuard
+B=/.jbroot/var/mobile/Library/BioProtectLeakGuard
+
+mkdir -p "$R" "$J" "$B" /var/mobile/Library/Preferences 2>/dev/null
+for d in "$R" "$J" "$B"; do
+    [ -d "$d" ] && chown mobile:mobile "$d" 2>/dev/null && chmod 755 "$d" 2>/dev/null
+done
+
+# ---- 安装标记（2.0.5）：装没装一查便知 ----
+STAMP="$(date '+%Y-%m-%d %H:%M:%S')"
+for f in /var/mobile/Library/Preferences/BioProtectLeakGuard.installed "$R/installed.txt" "$J/installed.txt" "$B/installed.txt"; do
+    printf 'BioProtectLeakGuard 2.0.13 installed at %s\n' "$STAMP" > "$f" 2>/dev/null
+    chown mobile:mobile "$f" 2>/dev/null
+    chmod 644 "$f" 2>/dev/null
+done
+
+# 旧日志改名，别让新数据混在旧数据里
+for f in "$R/guard.log" "$J/guard.log" "$B/guard.log" /var/mobile/Library/Preferences/BioProtectLeakGuard.log; do
+    [ -f "$f" ] && mv "$f" "$f.old" 2>/dev/null
+done
+
+CFG='<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnableCFCleanup</key><true/>
+	<key>EnableFDReclaim</key><true/>
+	<key>EnableLog</key><true/>
+	<key>LogInterval</key><integer>300</integer>
+	<key>CFGraceSeconds</key><integer>15</integer>
+	<key>FDGraceSeconds</key><integer>30</integer>
+	<key>FDHighWater</key><integer>320</integer>
+	<key>EnableAutoRespring</key><false/>
+	<key>PortThreshold</key><integer>20000</integer>
+	<key>DebugVerbose</key><false/>
+</dict>
+</plist>'
+
+# 三个位置各放一份，模块读哪份都行（已存在的配置不覆盖，保留用户改过的参数）
+for d in "$R" "$J" "$B"; do
+    [ -d "$d" ] || continue
+    if [ ! -f "$d/config.plist" ]; then
+        printf '%s\n' "$CFG" > "$d/config.plist" 2>/dev/null
+        chown mobile:mobile "$d/config.plist" 2>/dev/null
+        chmod 644 "$d/config.plist" 2>/dev/null
+    fi
+done
+
+echo "BioProtectLeakGuard 2.0.13: 安装标记、目录与配置已就绪。"
+echo "---- 设备上 dylib 指纹（若与构建报告的 md5 不同 = 包被转换器重写过）----"
+for f in /var/jb/Library/MobileSubstrate/DynamicLibraries/BioProtectLeakGuard.dylib \
+         /var/mobile/Library/MobileSubstrate/DynamicLibraries/BioProtectLeakGuard.dylib; do
+    if [ -f "$f" ]; then
+        md5sum "$f" 2>/dev/null || echo "(md5sum 不可用)"
+        ls -l "$f"
+    fi
+done
+echo "验证要点（guard.log）："
+echo "  1) respring 后约 5 秒出现「影子通道自验证: ok」= 引擎在跑"
+echo "  2) 每 5 分钟一条 stat 行：ports= 总端口，tS/tR/tO/tD/tP = send/receive/send-once/dead/port-set 分类"
+echo "     （tO 涨 = 未应答 RPC 泛滥；tR 涨 = 进程内自建不释放；tS 涨 = 外发连接不释放）"
+echo "  3) 每条 stat 后跟 top construct / top xpc 行：直接列出谁在创建端口（镜像+偏移 / 镜像/服务名）"
+echo "  4) 止血开关（可选）：把 config.plist 里 EnableAutoRespring 改 true，"
+echo "     端口超阈值且锁屏时自动受控重启桌面，避免白天使用中被 jetsam 强杀"
+echo "安装时间: $STAMP"
+exit 0
