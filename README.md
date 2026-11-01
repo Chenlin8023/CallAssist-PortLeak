@@ -1,6 +1,9 @@
 # CallAssist PortLeak — SpringBoard 端口泄漏侦查/止血工具
 
-> **BioProtect Leak Guard v2.0.13** · 原生 roothide 包（`iphoneos-arm64e`）
+> **v2.1.0** · 原生 roothide 包（`iphoneos-arm64e`）
+>
+> 旧名 BioProtect Leak Guard 已停用：真正的泄漏源是 CallAssist，包名同步改为
+> `com.local.callassistportleak`（附带 `Conflicts`/`Replaces` 旧包，可直接升级覆盖）。
 >
 > 解决「iPhone 每天自动注销」：SpringBoard 的 Mach 端口被某插件持续泄漏、耗尽额度后触发系统保护性注销。
 > 本工具**逐层观测归因**，最终定责 **CallAssist（电话助手/来电助手）以约 2 次/秒轮询 IOKit 电池接口、
@@ -23,7 +26,7 @@ CallAssist 的 IOKit 轮询泄漏。整条归因链值得留档：
 
 案卷全记录见 [`reports/`](reports/)（04→16 共 13 篇，含三次误归因的修正过程与红线总结）。
 
-## 二、LeakGuard 做了什么
+## 二、工具做了什么
 
 加载于 SpringBoard（另覆盖 Preferences / camera / InCallService / Spotlight），三层能力：
 
@@ -31,7 +34,7 @@ CallAssist 的 IOKit 轮询泄漏。整条归因链值得留档：
    `xpcA=` 接管数 / `xpcF=` 回收数），归因数据可复现；
 2. **既有止血**：CFUserNotification 应答端口宽限后取消、摘除泄漏 RunLoop 源、
    fd 超水位时经 `F_GETPATH` 复核后关闭泄漏 fd；
-3. **XPC 接管-宽限-回收（2.0.13 新增，本案核心）**：
+3. **XPC 接管-宽限-回收（本案核心）**：
    - `xpc_connection_create*` 钩子内，栈回溯确认「插件驱动」且服务名 = `com.apple.iokit.powerdxpc`
      时 `xpc_retain` 一份并登记（512 槽，指针去重）；**SpringBoard 自身与纯系统路径的连接一律不碰**；
    - 5 秒清扫定时器里，把超过宽限期（默认 10s）的登记连接 `xpc_connection_cancel`（异步拆除，
@@ -44,7 +47,8 @@ CallAssist 的 IOKit 轮询泄漏。整条归因链值得留档：
 - **适用环境**：roothide 越狱（Bootstrap）；本包为**原生 roothide 形态**（`iphoneos-arm64e`），
   **直接安装，不要过 RootHide 转换器**（转换器会破坏 arm64e 的 PAC 认证，这正是 2.0.6 之前
   进安全模式的原因）。
-- 安装包：见 [Releases](../../releases) → `com.local.bioprotectleakguard_2.0.13_iphoneos-arm64e.deb`
+- 安装包：`com.local.callassistportleak_2.1.0_iphoneos-arm64e.deb`
+  （越狱源 <https://chenlin8023.github.io/> 直接安装，或见 Releases）
 - 校验：deb MD5 = `fd57a20375527562fd5205b23d883314`；安装后 postinst 会打印设备端 dylib 的
   md5，应等于 `b389fe794486df6f93bb9dfbd8b0d35e`（即未被转换器动过）。
 - 装完 **respring（注销）一次**生效。
@@ -62,7 +66,7 @@ CallAssist 的 IOKit 轮询泄漏。整条归因链值得留档：
 | `PortThreshold` | 见源码（≥2000 生效） | 端口触顶阈值 |
 | `DebugVerbose` | `false` | 详细日志 |
 
-## 五、验证（装 2.0.13 → respring → 正常用机半天）
+## 五、验证（装 2.1.0 → respring → 正常用机半天）
 
 1. boot 块应出现「xpc 回收: 就绪（宽限 10s …）」；
 2. stat 行判读：`xpcA` 与 `xpcF` 同步增长、差值稳定在个位数~几十 → 回收正常；
