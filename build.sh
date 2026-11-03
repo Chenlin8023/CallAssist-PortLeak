@@ -1,6 +1,6 @@
 #!/bin/bash
-# BioProtectLeakGuard 构建脚本（在 WSL 里跑）
-#   用法： wsl -d Ubuntu-22.04 -- bash /mnt/d/WorkBudy/Bioprotect/bioprotect-fix/build.sh
+# CallAssistLeakGuard 构建脚本（在 WSL 里跑）
+#   用法： wsl -d Ubuntu-22.04 -- bash /mnt/d/WorkBudy/iOS-Tweaks/CallAssist-PortLeak/build.sh
 #
 # 2.0.7（isa 认证补丁，沿用）：clang19（L1ghtmann）给 arm64e 编 CFSTR 时 isa 重定位是
 #   普通 UNSIGNED（不是 ARM64_RELOC_AUTHENTICATED_POINTER，已用最小样例实测），
@@ -30,9 +30,9 @@ set -u
 export THEOS="$HOME/theos"
 export PATH="$THEOS/bin:$PATH"
 
-SRC=/mnt/d/WorkBudy/Bioprotect/bioprotect-fix
+SRC=/mnt/d/WorkBudy/iOS-Tweaks/CallAssist-PortLeak
 DST="$HOME/bplg"
-OUT=/mnt/d/WorkBudy/Bioprotect/release
+OUT=/mnt/d/WorkBudy/iOS-Tweaks/release
 TC19="$HOME/tc19/linux/iphone/bin"   # clang 19 + ld64 956 + ldid(Procursus)
 
 die() { echo "!! $*"; exit 1; }
@@ -41,7 +41,7 @@ die() { echo "!! $*"; exit 1; }
 rm -rf "$DST"; mkdir -p "$DST"
 cp -r "$SRC"/. "$DST"/
 find "$DST" -type f -exec sed -i 's/\r$//' {} \; 2>/dev/null
-chmod 644 "$DST"/BioProtectLeakGuard.xm "$DST"/Makefile "$DST"/control "$DST"/BioProtectLeakGuard.plist
+chmod 644 "$DST"/CallAssistLeakGuard.xm "$DST"/Makefile "$DST"/control "$DST"/CallAssistLeakGuard.plist
 chmod 755 "$DST"/layout/DEBIAN/postinst
 mkdir -p "$DST/layout/Library/MobileSubstrate/DynamicLibraries"
 
@@ -66,7 +66,7 @@ echo
 echo "=== isa 认证补丁（arm64e 切片 __cfstring → auth bind）==="
 rm -rf "$DST/repack"; mkdir -p "$DST/repack"
 dpkg-deb -R "$DEB" "$DST/repack" || die "dpkg-deb -R 失败"
-DYLIB="$DST/repack/Library/MobileSubstrate/DynamicLibraries/BioProtectLeakGuard.dylib"
+DYLIB="$DST/repack/Library/MobileSubstrate/DynamicLibraries/CallAssistLeakGuard.dylib"
 [ -f "$DYLIB" ] || die "解包后找不到 dylib"
 
 python3 - "$DYLIB" <<'PYEOF' || die "isa 补丁失败"
@@ -139,14 +139,14 @@ find "$DST/chk" -name "*.dylib" -o -name "*.plist" | while read -r f; do
     printf '%s %s\n' "$(stat -c '%A' "$f")" "${f#$DST/chk}"
 done
 
-DYLIB=$(find "$DST/chk" -name "BioProtectLeakGuard.dylib" | head -1)
+DYLIB=$(find "$DST/chk" -name "CallAssistLeakGuard.dylib" | head -1)
 [ -n "$DYLIB" ] || die "包里没有主 dylib"
 [ -x "$DYLIB" ] || die "主 dylib 没有执行位（ElleKit 会静默跳过加载）"
 ARCHS=$("$TC19/lipo" -archs "$DYLIB" 2>/dev/null)
 echo "架构: $ARCHS"
 echo "$ARCHS" | grep -q "arm64 " || die "缺 arm64 切片"
 echo "$ARCHS" | grep -q "arm64e" || die "缺 arm64e 切片"
-grep -q "2.0.13" "$DYLIB" || die "dylib 内没有版本串 2.0.13"
+grep -q "2.1.0" "$DYLIB" || die "dylib 内没有版本串 2.1.0"
 
 # ---------------------------------------------------------------------------
 # 二进制终审：arm64e 切片四要素（cpusubtype / ptr_format=12 / 页链非空 / isa 全认证）
@@ -245,8 +245,8 @@ if grep -q "/var/mobile" "$DYLIB"; then
 fi
 
 mkdir -p "$OUT"
-cp -f "$DEB" "$OUT/com.local.bioprotectleakguard_2.0.13_iphoneos-arm64e.deb"
+cp -f "$DEB" "$OUT/com.local.callassistleakguard_2.1.0_iphoneos-arm64e.deb"
 echo "=== 已复制到 $OUT ==="
-md5sum "$OUT/com.local.bioprotectleakguard_2.0.13_iphoneos-arm64e.deb"
+md5sum "$OUT/com.local.callassistleakguard_2.1.0_iphoneos-arm64e.deb"
 md5sum "$DYLIB"
 ls -la "$OUT"/*.deb | tail -6

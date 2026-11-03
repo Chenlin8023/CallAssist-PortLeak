@@ -1,5 +1,5 @@
 // ============================================================================
-//  BioProtectLeakGuard 2.0.4
+//  CallAssistLeakGuard 2.0.4
 //  ---------------------------------------------------------------------------
 //  针对 BioProtect 4.6-222 (roothide) 逆向结论编写的资源泄漏修复模块。
 //
@@ -115,6 +115,29 @@
 //  com.apple.iokit.powerdxpc 连接做接管-宽限-回收（xpc_retain 登记，超宽限期
 //  xpc_connection_cancel + 释放），CallAssist 可继续使用而端口不再泄漏。
 //  EnableXPCReclaim=false 可关（config.plist）。
+//
+//  2.0.14（2.0.13 真机日志驱动的两项增强）：
+//    真机数据（11-01/02 夜）：xpcA≈xpcF（差仅 33）→ powerdxpc 回收工作正常，
+//    主泄漏已消除；但空闲期 ports 仍 +6.6/分钟，同期 xpc 驱动者 all-system(nosb)
+//    恰好 +6.7/分钟——残余增长来自 Foundation 系匿名连接（siri.uaf/backlightd 等），
+//    不在写死的 powerdxpc 回收范围内。本版：
+//    ① stat 行新增 p5=（本周期 ports 净增量，与 xpc5 同口径）——残余趋势
+//      一眼可见，无需再手算两条累计曲线的斜率差；
+//    ② 回收服务范围可配置：config.plist 新增 XPCReclaimServices（逗号/空格
+//      分隔，前缀匹配，默认仍只有 com.apple.iokit.powerdxpc）——将来若其它
+//      服务名的「插件驱动」连接也现形，改配置即可覆盖，无需重编译。
+//      安全条件不变：仍要求「直接调用方是系统框架 + 栈回溯找到插件驱动者」，
+//      SB 自身/纯系统路径/插件直连的长活连接一律不碰。
+//
+//  2.1.0（更名）：全案定责已闭环——真凶是 CallAssist（来电助手）的 powerdxpc
+//  轮询泄漏，BioProtect 仅是最初被怀疑的对象。项目/插件/包名/偏好域/日志目录
+//  统一更名 BioProtectLeakGuard → CallAssistLeakGuard、
+//  com.local.bioprotectleakguard → com.local.callassistleakguard。
+//  功能与 2.0.14 完全一致（CF/fd 钩子仍只对 BioProtect 调用方生效，
+//  bplg_caller_is_bioprotect 保留原名以自解释）。
+//  ⚠ 升级须知：包 id 变了，设备上必须先卸载旧的 com.local.bioprotectleakguard
+//  再装本包，否则两个 dylib 会同时在 SpringBoard 里注入钩子。
+
 // ============================================================================
 
 #import <Foundation/Foundation.h>
@@ -142,7 +165,7 @@
 // iOS SDK 的 execinfo.h 不声明 backtrace（符号在 libSystem 里存在），手动声明
 extern "C" int backtrace(void **, int);
 
-#define BPLG_VERSION   "2.0.13"
+#define BPLG_VERSION   "2.1.0"
 #define BPLG_MAXLOG    (256 * 1024)
 #define BPLG_KEEPLOG   (128 * 1024)
 
@@ -157,7 +180,7 @@ extern "C" int backtrace(void **, int);
 //  我们的路径拼接，也不受沙箱与重定向影响）。
 // ---------------------------------------------------------------------------
 #define BPLG_LOG_NAME   "guard.log"
-#define BPLG_PREF_DOMAIN "com.local.bioprotectleakguard"
+#define BPLG_PREF_DOMAIN "com.local.callassistleakguard"
 
 // ---------------------------------------------------------------------------
 //  2.0.7 面包屑：纯 POSIX（getenv/open/write/close），必须先于一切 ObjC/CF。
@@ -169,7 +192,7 @@ static void bplg_crumb(const char *tag) {
     if (!home || !*home) home = getenv("HOME");
     if (!home || !*home) home = "/tmp";
     char path[512];
-    snprintf(path, sizeof(path), "%s/Library/" "BioProtectLeakGuard/crumb.log", home);
+    snprintf(path, sizeof(path), "%s/Library/" "CallAssistLeakGuard/crumb.log", home);
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
         snprintf(path, sizeof(path), "/tmp/" "BPLG-crumb.log");
@@ -205,16 +228,16 @@ static void bplg_build_sinks(void) {
     int n = 0;
     if (rf) {
         // 真实根直写：不经 libroot 重定向、不经 cfprefsd，Filza 从根目录直接可见
-        cands[n++] = [rf stringByAppendingPathComponent:@"Library/BioProtectLeakGuard/guard.log"];
-        cands[n++] = [rf stringByAppendingPathComponent:@"Library/Preferences/BioProtectLeakGuard.log"];
+        cands[n++] = [rf stringByAppendingPathComponent:@"Library/CallAssistLeakGuard/guard.log"];
+        cands[n++] = [rf stringByAppendingPathComponent:@"Library/Preferences/CallAssistLeakGuard.log"];
     }
     if (home) {
-        cands[n++] = [home stringByAppendingPathComponent:@"/Library/BioProtectLeakGuard/guard.log"];
-        cands[n++] = [home stringByAppendingPathComponent:@"/Library/Preferences/BioProtectLeakGuard.log"];
-        cands[n++] = [home stringByAppendingPathComponent:@"/Documents/BioProtectLeakGuard.log"];
+        cands[n++] = [home stringByAppendingPathComponent:@"/Library/CallAssistLeakGuard/guard.log"];
+        cands[n++] = [home stringByAppendingPathComponent:@"/Library/Preferences/CallAssistLeakGuard.log"];
+        cands[n++] = [home stringByAppendingPathComponent:@"/Documents/CallAssistLeakGuard.log"];
     }
-    if (tmp) cands[n++] = [tmp stringByAppendingPathComponent:@"BioProtectLeakGuard.log"];
-    cands[n++] = [@"/tmp" stringByAppendingPathComponent:@"bioprotectleakguard.log"];
+    if (tmp) cands[n++] = [tmp stringByAppendingPathComponent:@"CallAssistLeakGuard.log"];
+    cands[n++] = [@"/tmp" stringByAppendingPathComponent:@"callassistleakguard.log"];
 
     for (int i = 0; i < n && i < 8; i++) {
         const char *p = cands[i].fileSystemRepresentation;
@@ -234,10 +257,10 @@ static void bplg_build_cfg_paths(void) {
     NSString *rf   = bplg_rootfs_home();
     NSString *cands[4];
     int n = 0;
-    if (rf)   cands[n++] = [rf   stringByAppendingPathComponent:@"Library/BioProtectLeakGuard/config.plist"];
-    if (home) cands[n++] = [home stringByAppendingPathComponent:@"/Library/BioProtectLeakGuard/config.plist"];
-    if (rf)   cands[n++] = [rf   stringByAppendingPathComponent:@"Library/Preferences/BioProtectLeakGuard.plist"];
-    if (home) cands[n++] = [home stringByAppendingPathComponent:@"/Library/Preferences/BioProtectLeakGuard.plist"];
+    if (rf)   cands[n++] = [rf   stringByAppendingPathComponent:@"Library/CallAssistLeakGuard/config.plist"];
+    if (home) cands[n++] = [home stringByAppendingPathComponent:@"/Library/CallAssistLeakGuard/config.plist"];
+    if (rf)   cands[n++] = [rf   stringByAppendingPathComponent:@"Library/Preferences/CallAssistLeakGuard.plist"];
+    if (home) cands[n++] = [home stringByAppendingPathComponent:@"/Library/Preferences/CallAssistLeakGuard.plist"];
     for (int i = 0; i < n && i < 4; i++) {
         const char *p = cands[i].fileSystemRepresentation;
         if (!p) continue;
@@ -308,7 +331,7 @@ static void bplg_ensure_dirs(void) {
 // ---------------------------------------------------------------------------
 //  CFPreferences 影子日志
 //  完全不走文件路径：由 cfprefsd 落到 /var/mobile/Library/Preferences/ 下，
-//  用 Filza 打开 com.local.bioprotectleakguard.plist 就能看到最近的日志。
+//  用 Filza 打开 com.local.callassistleakguard.plist 就能看到最近的日志。
 //  转换器改不到它，沙箱也拦不住。
 // ---------------------------------------------------------------------------
 static char   gShadowBuf[6144];
@@ -348,7 +371,7 @@ static void bplg_log(const char *fmt, ...);   // 前置声明（定义在 bplg_v
 static void bplg_shadow_boot(void) {
     char boot[512];
     int n = snprintf(boot, sizeof(boot),
-                     "=== BioProtectLeakGuard %s pid=%d 进程=%s 影子通道启用 ===\n",
+                     "=== CallAssistLeakGuard %s pid=%d 进程=%s 影子通道启用 ===\n",
                      BPLG_VERSION, getpid(),
                      NSProcessInfo.processInfo.processName.UTF8String ?: "?");
     if (n <= 0) return;
@@ -445,7 +468,7 @@ static int bplg_caller_is_bioprotect(void *ra) {
     if (dladdr(ra, &info) && info.dli_fname) {
         const char *base = strrchr(info.dli_fname, '/');
         base = base ? base + 1 : info.dli_fname;
-        // 本模块自己叫 BioProtectLeakGuard.dylib，也以 BioProtect 开头，必须排除，
+        // 本模块自己叫 CallAssistLeakGuard.dylib，也以 BioProtect 开头，必须排除，
         // 否则会把自己的 fd 当成泄漏源
         if (strstr(base, "LeakGuard") == NULL &&
             strncmp(base, "BioProtect", 10) == 0) isbp = 1;
@@ -899,6 +922,27 @@ static int bplg_xpc_driver_walk(void *ra, char *imgOut, size_t imgCap) {
 static int      gCfgXPC         = 1;    // 2.0.13：回收插件驱动的 powerdxpc 泄漏连接
 static long     gCfgXPCGrace    = 10;   // 宽限（秒）
 
+// 2.0.14：回收服务名单（config.plist 的 XPCReclaimServices 可覆盖）。
+// 前缀匹配：填 "com.apple.iokit.power" 即可覆盖 powerdxpc 及同族服务，
+// 避免逐个枚举。默认仍只有定责服务，行为与 2.0.13 完全一致。
+#define BPLG_XPC_SVC_MAX 8
+#define BPLG_XPC_SVC_LEN 64
+static char gXPCServices[BPLG_XPC_SVC_MAX][BPLG_XPC_SVC_LEN] = {
+    "com.apple.iokit.powerdxpc"
+};
+static int gXPCServiceCount = 1;
+
+// 命中任意一条前缀即接管候选
+static int bplg_xpc_service_matches(const char *name) {
+    if (!name || !name[0]) return 0;
+    for (int i = 0; i < gXPCServiceCount; i++) {
+        size_t n = strlen(gXPCServices[i]);
+        if (n == 0) continue;
+        if (strncmp(name, gXPCServices[i], n) == 0) return 1;
+    }
+    return 0;
+}
+
 // ===========================================================================
 //  泄漏 C（2.0.13 终版修复）：插件驱动的 powerdxpc 连接泄漏
 //  定责（2.0.12 真机）：CallAssist.dylib+1a9cfc 以 ~2 次/秒轮询 IOKit 电池接口，
@@ -923,7 +967,7 @@ static bplg_xpc_cancel_t  bplg_xpc_cancel_fn  = NULL;
 
 static void bplg_xpc_adopt(const char *name, void *conn, const char *drvimg) {
     if (!gCfgXPC || !conn || !name || !drvimg[0]) return;
-    if (strcmp(name, "com.apple.iokit.powerdxpc") != 0) return;   // 只接管定责服务
+    if (!bplg_xpc_service_matches(name)) return;   // 2.0.14：名单内服务才接管
     if (!bplg_xpc_retain_fn || !bplg_xpc_release_fn) return;
     bplg_xpc_retain_fn(conn);   // 我们自己的引用，回收时只释放这一份
 
@@ -1158,6 +1202,28 @@ static void bplg_load_config(void) {
     if ((v = d[@"PortThreshold"]))        { long x = [v longValue]; if (x >= 2000) gCfgPortLimit = x; }
     if ((v = d[@"EnableXPCReclaim"]))    gCfgXPC = [v boolValue];
     if ((v = d[@"XPCGraceSeconds"]))     { long x = [v longValue]; if (x >= 5) gCfgXPCGrace = x; }
+    if ((v = d[@"XPCReclaimServices"])) {
+        // 支持 NSArray 或 "a,b c;d" 单串两种写法；前缀匹配，空项忽略
+        NSMutableArray *names = [NSMutableArray array];
+        if ([v isKindOfClass:[NSArray class]]) {
+            for (id e in (NSArray *)v)
+                if ([e isKindOfClass:[NSString class]]) [names addObject:e];
+        } else if ([v isKindOfClass:[NSString class]]) {
+            NSCharacterSet *seps = [NSCharacterSet characterSetWithCharactersInString:@",; "];
+            for (NSString *e in [(NSString *)v componentsSeparatedByCharactersInSet:seps])
+                if (e.length) [names addObject:e];
+        }
+        int n = 0;
+        for (NSString *s in names) {
+            if (n >= BPLG_XPC_SVC_MAX) break;
+            const char *u = s.UTF8String;
+            if (!u || !u[0]) continue;
+            strncpy(gXPCServices[n], u, BPLG_XPC_SVC_LEN - 1);
+            gXPCServices[n][BPLG_XPC_SVC_LEN - 1] = 0;
+            n++;
+        }
+        if (n > 0) gXPCServiceCount = n;   // 全空/写错类型则保留默认名单
+    }
     if ((v = d[@"DebugVerbose"]))         gCfgDebug = [v boolValue];
 }
 
@@ -1172,7 +1238,7 @@ static void bplg_start_timers(void) {
     static dispatch_source_t t = NULL;
     static dispatch_queue_t q = NULL;
     if (t) return;   // 已启动，防重入
-    q = dispatch_queue_create("bioprotectleakguard.timer", NULL);
+    q = dispatch_queue_create("callassistleakguard.timer", NULL);
     t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
     if (!t) {
         bplg_log("!! 定时器创建失败：清扫与统计将不会运行");
@@ -1204,8 +1270,14 @@ static void bplg_start_timers(void) {
                 static unsigned long sLastXPC = 0;
                 unsigned long xpc5 = (gXPCTotal >= sLastXPC) ? (gXPCTotal - sLastXPC) : 0;
                 sLastXPC = gXPCTotal;
-                bplg_log("stat ports=%u fd=%d/%d shadow=%s cf_called=%lu cf_adopt=%lu cf_free=%lu fd_open=%lu fd_close=%lu fd_skip=%lu pa=%lu paBP=%lu pc=%lu mpaf=%lu xpc=%lu xpc5=%lu xpcA=%lu xpcF=%lu tS=%lu tR=%lu tO=%lu tD=%lu tP=%lu lock=%d",
-                         ports, used, limit,
+                // 2.0.14：p5 = 本周期 ports 净增量（与 xpc5 同口径），
+                // 残余增长趋势一眼可见，不用再手算累计曲线斜率
+                static mach_msg_type_number_t sLastPorts = 0;
+                int p5 = (sLastPorts && ports >= sLastPorts) ? (int)(ports - sLastPorts)
+                                                             : (sLastPorts ? -(int)(sLastPorts - ports) : 0);
+                sLastPorts = ports;
+                bplg_log("stat ports=%u p5=%d fd=%d/%d shadow=%s cf_called=%lu cf_adopt=%lu cf_free=%lu fd_open=%lu fd_close=%lu fd_skip=%lu pa=%lu paBP=%lu pc=%lu mpaf=%lu xpc=%lu xpc5=%lu xpcA=%lu xpcF=%lu tS=%lu tR=%lu tO=%lu tD=%lu tP=%lu lock=%d",
+                         ports, p5, used, limit,
                          gShadowOk ? "ok" : (gShadowReady ? "fail" : "wait"),
                          gCFCreateCalls, gCFAdopted, gCFReclaimed,
                          gFDOpened, gFDClosed, gFDSkipped,
@@ -1274,7 +1346,7 @@ static int bplg_bp_image_loaded(void) {
         bplg_log("[boot] v%s pid=%d 已进入构造函数", BPLG_VERSION, getpid());
 
         bplg_log("钩子引擎: substrate 直连（MSHookFunction 已链接）");
-        NSLog(@"[BioProtectLeakGuard] v%s pid=%d hook=substrate直连", BPLG_VERSION, getpid());
+        NSLog(@"[CallAssistLeakGuard] v%s pid=%d hook=substrate直连", BPLG_VERSION, getpid());
 
         bplg_load_config();
 
@@ -1289,17 +1361,17 @@ static int bplg_bp_image_loaded(void) {
                      used ? " | " : "", kBPLGLogs[i]);
         }
 
-        bplg_log("=== BioProtectLeakGuard %s 载入 pid=%d 进程=%s BioProtect已注入=%d ===",
+        bplg_log("=== CallAssistLeakGuard %s 载入 pid=%d 进程=%s BioProtect已注入=%d ===",
                  BPLG_VERSION, getpid(),
                  NSProcessInfo.processInfo.processName.UTF8String ?: "?",
                  bplg_bp_image_loaded());
         bplg_log("日志落点: %s", gSinkNote[0] ? gSinkNote : "(文件全部不可写)");
         bplg_log("影子日志: 域 %s 的 diaglog 键（加载 5 秒后启用，避开启动期 XPC）", BPLG_PREF_DOMAIN);
-        NSLog(@"[BioProtectLeakGuard] v%s pid=%d sink=%s", BPLG_VERSION, getpid(), gSinkNote);
+        NSLog(@"[CallAssistLeakGuard] v%s pid=%d sink=%s", BPLG_VERSION, getpid(), gSinkNote);
 
-        bplg_log("配置: cf=%d fd=%d log=%lds cf宽限=%lds fd宽限=%lds fd水位=%ld respring=%d debug=%d",
+        bplg_log("配置: cf=%d fd=%d log=%lds cf宽限=%lds fd宽限=%lds fd水位=%ld respring=%d xpc回收=%d xpc宽限=%lds debug=%d",
                  gCfgCF, gCfgFD, gCfgInterval, gCfgCFGrace, gCfgFDGrace,
-                 gCfgFDHighWater, gCfgRespring, gCfgDebug);
+                 gCfgFDHighWater, gCfgRespring, gCfgXPC, gCfgXPCGrace, gCfgDebug);
 
         if (gCfgCF) {
             MSHookFunction((void *)CFUserNotificationCreate, (void *)bplg_hook_create, (void **)&gOrigCreate);
@@ -1341,9 +1413,17 @@ static int bplg_bp_image_loaded(void) {
         bplg_xpc_retain_fn  = (bplg_xpc_retain_t)dlsym(RTLD_DEFAULT, "xpc_retain");
         bplg_xpc_release_fn = (bplg_xpc_release_t)dlsym(RTLD_DEFAULT, "xpc_release");
         bplg_xpc_cancel_fn  = (bplg_xpc_cancel_t)dlsym(RTLD_DEFAULT, "xpc_connection_cancel");
-        bplg_log("xpc 回收: %s（宽限 %lds，目标=插件驱动的 powerdxpc 连接）",
-                 (bplg_xpc_retain_fn && bplg_xpc_release_fn) ? "就绪" : "函数缺失，仅观测",
-                 gCfgXPCGrace);
+        {
+            // 2.0.14：回收名单打出来，配置是否生效一目了然
+            char svcs[BPLG_XPC_SVC_MAX * BPLG_XPC_SVC_LEN];
+            size_t off = 0;
+            for (int i = 0; i < gXPCServiceCount && off + BPLG_XPC_SVC_LEN < sizeof(svcs); i++)
+                off += (size_t)snprintf(svcs + off, sizeof(svcs) - off, "%s%s",
+                                        i ? "|" : "", gXPCServices[i]);
+            bplg_log("xpc 回收: %s（宽限 %lds，目标=插件驱动的 [%s] 连接，前缀匹配）",
+                     (bplg_xpc_retain_fn && bplg_xpc_release_fn) ? "就绪" : "函数缺失，仅观测",
+                     gCfgXPCGrace, svcs);
+        }
 
         bplg_crumb("hooks");
 
